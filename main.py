@@ -156,11 +156,10 @@ def search_xy_jobs(keyword: str) -> list:
     return jobs
 
 
-# ---------------------- 钟吾直聘（已适配 /job/xxxx） ----------------------
+# ---------------------- 钟吾直聘 ----------------------
 def get_zw_session():
     session = requests.Session()
     cookie_str = os.getenv("ZW_COOKIE", "").strip()
-    # 新增调试
     print(f"DEBUG: raw ZW_COOKIE len = {len(os.getenv('ZW_COOKIE',''))}")
     print(f"DEBUG: after strip len = {len(cookie_str)}")
 
@@ -169,7 +168,6 @@ def get_zw_session():
     session.headers["Cookie"] = cookie_str
     session.headers.update(HEADERS)
     return session
-
 
 
 def fetch_html_zw(session, url):
@@ -202,7 +200,6 @@ def search_zw_jobs(session, keyword: str) -> list:
             continue
         full_url = urljoin(url, href)
 
-        # ✅ 根据你给的链接修改的过滤规则
         if "/job/" not in full_url:
             continue
         if "/company/" in full_url:
