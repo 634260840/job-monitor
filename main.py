@@ -25,8 +25,8 @@ BAD_TITLE_WORDS = [
     "返回", "上一页", "下一页", "微信扫一扫", "公众号", "客服"
 ]
 
-SEEN_FILE_XY = Path("seen_ids_xy.json")   # 新沂好就业已推送记录
-SEEN_FILE_ZW = Path("seen_ids_zw.json")   # 钟吾直聘已推送记录
+SEEN_FILE_XY = Path("seen_ids_xy.json")
+SEEN_FILE_ZW = Path("seen_ids_zw.json")
 
 
 def clean(text: str) -> str:
@@ -96,7 +96,7 @@ def push_dingtalk(title: str, content: str, push_url: str):
         print(f"钉钉推送异常：{e}")
 
 
-# ---------------------- 【新沂好就业】抓取逻辑 ----------------------
+# ---------------------- 新沂好就业 ----------------------
 def fetch_html_xy(url):
     r = requests.get(url, headers=HEADERS, timeout=25)
     r.raise_for_status()
@@ -156,7 +156,7 @@ def search_xy_jobs(keyword: str) -> list:
     return jobs
 
 
-# ---------------------- 【钟吾直聘】抓取逻辑 ----------------------
+# ---------------------- 钟吾直聘（已适配 /job/xxxx） ----------------------
 def get_zw_session():
     session = requests.Session()
     cookie_str = os.getenv("ZW_COOKIE", "").strip()
@@ -197,12 +197,11 @@ def search_zw_jobs(session, keyword: str) -> list:
             continue
         full_url = urljoin(url, href)
 
-        # ========== 这里改成你实际的岗位详情URL特征 ==========
-        if "/seekwap/recruit/show?id=" not in full_url:
+        # ✅ 根据你给的链接修改的过滤规则
+        if "/job/" not in full_url:
             continue
-        if "/seekwap/company/" in full_url:
+        if "/company/" in full_url:
             continue
-        # =====================================================
 
         title = clean(a.get_text())
         if len(title) < 2:
@@ -237,7 +236,6 @@ def main():
     all_new_jobs = []
     all_found_jobs = []
 
-    # --- 1. 抓取【新沂好就业】---
     seen_xy = load_seen(SEEN_FILE_XY)
     first_xy = not SEEN_FILE_XY.exists()
     xy_list = []
@@ -255,7 +253,6 @@ def main():
         print(f"【新沂好就业】抓取异常：{e}")
         push_dingtalk("【岗位监控异常｜新沂好就业】", f"抓取失败：{e}", push_url)
 
-    # --- 2. 抓取【钟吾直聘】---
     seen_zw = load_seen(SEEN_FILE_ZW)
     first_zw = not SEEN_FILE_ZW.exists()
     zw_list = []
@@ -271,13 +268,12 @@ def main():
         seen_zw.update(j["id"] for j in zw_list)
         save_seen(SEEN_FILE_ZW, seen_zw)
     except Exception as e:
-        print(f"【岗位监控异常｜钟吾直聘】", f"抓取失败：{e}", push_url)
+        print(f"【岗位监控异常｜钟吾直聘】抓取失败：{e}")
+        push_dingtalk("【岗位监控异常｜钟吾直聘】", f"抓取失败：{e}", push_url)
 
-    # --- 3. 推送汇总 ---
     if len(all_found_jobs) == 0:
         push_dingtalk("【双平台岗位查询】", "本次在【新沂好就业、钟吾直聘】均未找到近15天电工、仪表岗位。", push_url)
     else:
-        # 首次运行推送全部，否则只推送新增
         is_first_run = first_xy or first_zw
         send_list = all_found_jobs if is_first_run else all_new_jobs
         if send_list:
