@@ -24,4 +24,6 @@ jobs:
         env:
           PUSH_URL: ${{ secrets.PUSH_URL }}
           ZW_COOKIE: ${{ secrets.ZW_COOKIE }}
-        run: python main.py
+        run: 
+        echo "shell ZW_COOKIE len: ${#ZW_COOKIE}"
+        python main.py
