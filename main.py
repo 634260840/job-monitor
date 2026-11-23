@@ -160,11 +160,16 @@ def search_xy_jobs(keyword: str) -> list:
 def get_zw_session():
     session = requests.Session()
     cookie_str = os.getenv("ZW_COOKIE", "").strip()
+    # 新增调试
+    print(f"DEBUG: raw ZW_COOKIE len = {len(os.getenv('ZW_COOKIE',''))}")
+    print(f"DEBUG: after strip len = {len(cookie_str)}")
+
     if not cookie_str:
         raise Exception("未配置 ZW_COOKIE 环境变量（钟吾直聘Cookie）")
     session.headers["Cookie"] = cookie_str
     session.headers.update(HEADERS)
     return session
+
 
 
 def fetch_html_zw(session, url):
