@@ -26,8 +26,10 @@ SOURCES = [
         "enabled": True,
         "check_auth": False,
         "card_selector": "",
-        "link_pattern": r"/job/",
-        "exclude_href": ["c=search", "keyword="],
+        # 真实岗位链接通常带有 index.php?c=show&id= 或者是 /job/数字.html
+        "link_pattern": r"/job/(index\.php\?c=show|detail|\d+)",
+        # 把刚才截图里出现的筛选链接全部屏蔽
+        "exclude_href": ["c=search", "keyword=", "all=", "tp=", "page=", "?c=list"],
     },
     {
         "name": "钟吾直聘",
@@ -51,9 +53,11 @@ SOURCES = [
     },
 ]
 
+# 屏蔽网页上常见的按钮和无意义文字
 BAD_TITLE_WORDS = [
-    "登录", "注册", "首页", "更多", "搜索", "找工作", "联系我们",
-    "返回", "上一页", "下一页", "微信扫一扫", "公众号", "客服",
+    "登录", "注册", "首页", "更多", "搜索", "找工作", "联系我们", "返回", 
+    "上一页", "下一页", "微信扫一扫", "公众号", "客服", "清除所选", "申请",
+    "投递", "详情", "查看", "筛选", "列表", "地图", "已选", "确定", "取消"
 ]
 
 def clean(text: str) -> str:
@@ -77,41 +81,33 @@ def fetch_html(src):
     r = requests.get(src["url"], headers=HEADERS, timeout=25)
     r.raise_for_status()
     r.encoding = r.apparent_encoding or r.encoding
-    html = r.text
-
-    if src.get("check_auth"):
-        auth_words = ["拖动滑块完成拼图", "短信验证登录", "扫码登录", "请完成安全验证", "图形验证码"]
-        if any(w in html for w in auth_words):
-            raise RuntimeError("页面要求登录或验证码")
-    return html
+    return r.text
 
 def parse_jobs(src, html):
     soup = BeautifulSoup(html, "html.parser")
     jobs = []
+    cards = soup.find_all("a", href=True)
 
-    if src.get("card_selector"):
-        cards = soup.select(src["card_selector"])
-    else:
-        cards = soup.find_all("a", href=True)
-
-    for card in cards:
-        a = card if card.name == "a" else card.find("a", href=True)
-        if not a:
-            continue
-
+    for a in cards:
         href = urljoin(src["url"], a.get("href", ""))
+        
+        # 1. 过滤基础无效链接
         if not href or href.startswith("javascript") or href == "#":
             continue
+            
+        # 2. 必须匹配真实岗位的链接特征
         if src.get("link_pattern") and not re.search(src["link_pattern"], href):
             continue
+            
+        # 3. 过滤黑名单链接
         if any(x in href for x in src.get("exclude_href", [])):
             continue
 
+        # 4. 提取标题并清洗
         title = clean(a.get_text(" ", strip=True))
-        if len(title) < 4 or title in ["查看详情", "投递简历", "详情"]:
-            title = clean(card.get_text(" ", strip=True))[:100]
-
-        if not title or len(title) < 2:
+        
+        # 如果标题太短，或者包含垃圾词汇，直接丢弃
+        if len(title) < 3:
             continue
         if any(w in title for w in BAD_TITLE_WORDS):
             continue
@@ -129,31 +125,19 @@ def push(title: str, content: str):
     push_url = os.environ.get("PUSH_URL", "").strip()
 
     if not push_url:
-        print("未配置 PUSH_URL，跳过推送：", title, content)
+        print("未配置 PUSH_URL，跳过推送")
         return
 
     if push_type == "bark":
-        # 苹果 Bark 专属格式
         url = push_url.rstrip("/") + "/" + quote(title) + "/" + quote(content)
         requests.get(url, timeout=15)
-    elif push_type == "dingtalk":
-        # 钉钉机器人格式
+    elif push_type in ["dingtalk", "wecom"]:
         requests.post(push_url, json={
             "msgtype": "text",
             "text": {"content": f"{title}\n{content}"}
         }, timeout=15)
-    elif push_type == "wecom":
-        # 企业微信群机器人格式
-        requests.post(push_url, json={
-            "msgtype": "text",
-            "text": {"content": f"{title}\n{content}"}
-        }, timeout=15)
-    else:
-        # 通用 Webhook
-        requests.post(push_url, json={"title": title, "content": content}, timeout=15)
 
 def main():
-    push("测试消息", "如果你收到这条消息，说明配置完全成功！")
     first_run = not SEEN_FILE.exists()
     seen = load_seen()
     all_jobs = []
@@ -173,16 +157,17 @@ def main():
             errors.append(f"{src['name']} 抓取失败：{e}")
 
     all_jobs = list({j["id"]: j for j in all_jobs}.values())
+    
+    # 恢复正常的逻辑：只推真正的新岗位
     new_jobs = [j for j in all_jobs if j["id"] not in seen]
 
     if first_run:
-        push("首次测试", f"成功抓取到 {len(all_jobs)} 条岗位，正在逐条推送给你...")
-        for j in all_jobs:
-            push(f"岗位：{j['title']}", f"来源：{j['source']}\n{j['url']}")
         seen.update(j["id"] for j in all_jobs)
         save_seen(seen)
+        push("监控启动", f"已记录目前所有真实岗位 {len(all_jobs)} 条。以后有新增会立刻通知。")
         return
 
+    # 发现新岗位，推送（最多20条防刷屏）
     for j in new_jobs[:20]:
         push(f"新岗位：{j['title']}", f"来源：{j['source']}\n{j['url']}")
 
