@@ -26,7 +26,6 @@ BAD_TITLE_WORDS = [
 ]
 
 SEEN_FILE_XY = Path("seen_ids_xy.json")
-SEEN_FILE_ZW = Path("seen_ids_zw.json")
 
 
 def clean(text: str) -> str:
@@ -156,87 +155,10 @@ def search_xy_jobs(keyword: str) -> list:
     return jobs
 
 
-# ---------------------- 钟吾直聘 ----------------------
-def get_zw_session():
-    session = requests.Session()
-    cookie_str = os.getenv("ZW_COOKIE", "").strip()
-    print(f"DEBUG: raw ZW_COOKIE len = {len(os.getenv('ZW_COOKIE',''))}")
-    print(f"DEBUG: after strip len = {len(cookie_str)}")
-
-    if not cookie_str:
-        raise Exception("未配置 ZW_COOKIE 环境变量（钟吾直聘Cookie）")
-    session.headers["Cookie"] = cookie_str
-    session.headers.update(HEADERS)
-    return session
-
-
-def fetch_html_zw(session, url):
-    r = session.get(url, timeout=25)
-    r.raise_for_status()
-    r.encoding = r.apparent_encoding or r.encoding
-    html = r.text
-    if "登录账号" in html:
-        raise Exception("钟吾直聘 Cookie 已失效，请重新复制登录Cookie！")
-    return html
-
-
-def get_detail_pubdate_zw(session, job_url: str) -> datetime | None:
-    try:
-        html = fetch_html_zw(session, job_url)
-        soup = BeautifulSoup(html, "html.parser")
-        return parse_publish_date(soup.get_text())
-    except Exception:
-        return None
-
-
-def search_zw_jobs(session, keyword: str) -> list:
-    url = f"https://www.zhongwuzhipin.cn/search?pageIndex=1&keyword={quote(keyword)}"
-    html = fetch_html_zw(session, url)
-    soup = BeautifulSoup(html, "html.parser")
-    jobs = []
-    for a in soup.find_all("a", href=True):
-        href = a.get("href", "").strip()
-        if not href or href.startswith(("javascript:", "#")):
-            continue
-        full_url = urljoin(url, href)
-
-        if "/job/" not in full_url:
-            continue
-        if "/company/" in full_url:
-            continue
-
-        title = clean(a.get_text())
-        if len(title) < 2:
-            continue
-        if any(w in title for w in BAD_TITLE_WORDS):
-            continue
-        if keyword not in title:
-            continue
-
-        card_text = clean(a.parent.get_text())
-        pub_dt = parse_publish_date(card_text)
-        if not is_within_limit(pub_dt):
-            pub_dt = get_detail_pubdate_zw(session, full_url)
-        if not is_within_limit(pub_dt):
-            continue
-
-        jid = hashlib.md5(f"zw::{keyword}::{full_url}".encode("utf-8")).hexdigest()
-        jobs.append({
-            "source": "钟吾直聘",
-            "id": jid,
-            "keyword": keyword,
-            "title": title[:120],
-            "url": full_url,
-            "pub_date": pub_dt.strftime("%Y-%m-%d")
-        })
-    jobs = list({j["id"]: j for j in jobs}.values())
-    return jobs
-
-
 def main():
     push_url = os.getenv("PUSH_URL", "").strip()
-    all_new_jobs = []
     all_found_jobs = []
+    all_new_jobs = []
 
     seen_xy = load_seen(SEEN_FILE_XY)
     first_xy = not SEEN_FILE_XY.exists()
@@ -255,31 +177,13 @@ def main():
         print(f"【新沂好就业】抓取异常：{e}")
         push_dingtalk("【岗位监控异常｜新沂好就业】", f"抓取失败：{e}", push_url)
 
-    seen_zw = load_seen(SEEN_FILE_ZW)
-    first_zw = not SEEN_FILE_ZW.exists()
-    zw_list = []
-    try:
-        sess = get_zw_session()
-        for kw in WATCH_KEYWORDS:
-            zw_list.extend(search_zw_jobs(sess, kw))
-        zw_list = list({j["id"]: j for j in zw_list}.values())
-        new_zw = [j for j in zw_list if j["id"] not in seen_zw]
-        all_found_jobs.extend(zw_list)
-        all_new_jobs.extend(new_zw)
-        print(f"【钟吾直聘】共抓到 {len(zw_list)} 条，新增 {len(new_zw)} 条")
-        seen_zw.update(j["id"] for j in zw_list)
-        save_seen(SEEN_FILE_ZW, seen_zw)
-    except Exception as e:
-        print(f"【岗位监控异常｜钟吾直聘】抓取失败：{e}")
-        push_dingtalk("【岗位监控异常｜钟吾直聘】", f"抓取失败：{e}", push_url)
-
     if len(all_found_jobs) == 0:
-        push_dingtalk("【双平台岗位查询】", "本次在【新沂好就业、钟吾直聘】均未找到近15天电工、仪表岗位。", push_url)
+        push_dingtalk("【岗位查询】", "本次在【新沂好就业】未找到近15天电工、仪表岗位。", push_url)
     else:
-        is_first_run = first_xy or first_zw
+        is_first_run = first_xy
         send_list = all_found_jobs if is_first_run else all_new_jobs
         if send_list:
-            msg_title = "【双平台｜发现新岗位】电工/仪表（近15天）"
+            msg_title = "【新沂好就业｜发现新岗位】电工/仪表（近15天）"
             msg = ""
             for idx, job in enumerate(send_list, 1):
                 msg += (
