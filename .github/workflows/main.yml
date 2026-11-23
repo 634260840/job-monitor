@@ -1,0 +1,36 @@
+name: job-monitor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run monitor
+        env:
+          PUSH_TYPE: ${{ secrets.PUSH_TYPE }}
+          PUSH_URL: ${{ secrets.PUSH_URL }}
+        run: python main.py
+      - name: Save seen ids
+        run: |
+          git config user.name "job-bot"
+          git config user.email "job-bot@local"
+          git add seen_ids.json || true
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "update seen ids"
+            git push
+          fi
