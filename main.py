@@ -176,9 +176,11 @@ def main():
     new_jobs = [j for j in all_jobs if j["id"] not in seen]
 
     if first_run:
+        push("首次测试", f"成功抓取到 {len(all_jobs)} 条岗位，正在逐条推送给你...")
+        for j in all_jobs:
+            push(f"岗位：{j['title']}", f"来源：{j['source']}\n{j['url']}")
         seen.update(j["id"] for j in all_jobs)
         save_seen(seen)
-        push("招聘监控已启动", f"已记录现有岗位 {len(all_jobs)} 条，之后只推送新岗位。")
         return
 
     for j in new_jobs[:20]:
