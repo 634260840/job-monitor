@@ -1,36 +1,27 @@
-name: job-monitor
+name: Job Monitor
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: '0,30 * * * *'
   workflow_dispatch:
 
 jobs:
-  run:
+  monitor:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install requests beautifulsoup4
+
       - name: Run monitor
         env:
-          PUSH_TYPE: ${{ secrets.PUSH_TYPE }}
           PUSH_URL: ${{ secrets.PUSH_URL }}
+          ZW_COOKIE: ${{ secrets.ZW_COOKIE }}
         run: python main.py
-      - name: Save seen ids
-        run: |
-          git config user.name "job-bot"
-          git config user.email "job-bot@local"
-          git add seen_ids.json || true
-          if git diff --cached --quiet; then
-            echo "no changes"
-          else
-            git commit -m "update seen ids"
-            git push
-          fi
