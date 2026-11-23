@@ -10,7 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PUSH_URL: ${{ secrets.PUSH_URL }}
-      ZW_COOKIE: ${{ secrets.ZW_COOKIE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,6 +23,4 @@ jobs:
         run: pip install requests beautifulsoup4
 
       - name: Run monitor
-        run: |
-          echo "shell ZW_COOKIE length: ${#ZW_COOKIE}"
-          python main.py
+        run: python main.py
