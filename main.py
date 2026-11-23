@@ -4,12 +4,13 @@ import json
 import hashlib
 from pathlib import Path
 from urllib.parse import urljoin, quote
+from datetime import datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
 
 SEEN_FILE = Path("seen_ids.json")
-
+DAYS_LIMIT = 15  # 最近15天
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -18,10 +19,7 @@ HEADERS = {
     )
 }
 
-# 你要监控的关键词列表
 WATCH_KEYWORDS = ["电工", "仪表"]
-
-# 搜索地址模板
 SEARCH_URL_TPL = "https://www.xyrsjjy.com/job/?c=search&keyword={kw}"
 
 BAD_TITLE_WORDS = [
@@ -32,6 +30,37 @@ BAD_TITLE_WORDS = [
 
 def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def parse_publish_date(text: str) -> datetime | None:
+    text = clean(text)
+    now = datetime.now()
+    # 匹配标准日期  yyyy-mm-dd
+    m = re.search(r"(\d{4}-\d{1,2}-\d{1,2})", text)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d")
+        except ValueError:
+            pass
+    # 中文相对时间
+    if "昨天" in text:
+        return now - timedelta(days=1)
+    if "前天" in text:
+        return now - timedelta(days=2)
+    m_day = re.search(r"(\d+)天前", text)
+    if m_day:
+        try:
+            d = int(m_day.group(1))
+            return now - timedelta(days=d)
+        except Exception:
+            pass
+    return None
+
+
+def is_within_limit(dt: datetime | None) -> bool:
+    if dt is None:
+        return False
+    return (datetime.now() - dt).days <= DAYS_LIMIT
 
 
 def load_seen():
@@ -57,6 +86,16 @@ def fetch_html(url):
     return r.text
 
 
+def get_detail_pubdate(job_url: str) -> datetime | None:
+    """进岗位详情页兜底拿发布时间"""
+    try:
+        html = fetch_html(job_url)
+        soup = BeautifulSoup(html, "html.parser")
+        return parse_publish_date(soup.get_text())
+    except Exception:
+        return None
+
+
 def search_one_keyword(keyword: str) -> list:
     url = SEARCH_URL_TPL.format(kw=quote(keyword))
     html = fetch_html(url)
@@ -69,10 +108,9 @@ def search_one_keyword(keyword: str) -> list:
             continue
         full_url = urljoin(url, href)
 
-        # 核心规则：只保留岗位申请页面 c=comapply&id=
+        # 只保留岗位申请页面
         if "c=comapply&id=" not in full_url:
             continue
-        # 排除公司主页等
         if "company/index.php?c=show" in full_url:
             continue
 
@@ -81,9 +119,16 @@ def search_one_keyword(keyword: str) -> list:
             continue
         if any(w in title for w in BAD_TITLE_WORDS):
             continue
-
-        # 标题必须包含当前这个关键词
         if keyword not in title:
+            continue
+
+        # 优先从列表附近文本提取时间
+        card_text = clean(a.parent.get_text())
+        pub_dt = parse_publish_date(card_text)
+        # 列表取不到，去详情页拿
+        if not is_within_limit(pub_dt):
+            pub_dt = get_detail_pubdate(full_url)
+        if not is_within_limit(pub_dt):
             continue
 
         jid = hashlib.md5(f"{keyword}::{full_url}".encode("utf-8")).hexdigest()
@@ -91,9 +136,9 @@ def search_one_keyword(keyword: str) -> list:
             "id": jid,
             "keyword": keyword,
             "title": title[:120],
-            "url": full_url
+            "url": full_url,
+            "pub_date": pub_dt.strftime("%Y-%m-%d")
         })
-    # 去重
     jobs = list({j["id"]: j for j in jobs}.values())
     return jobs
 
@@ -123,7 +168,7 @@ def main():
     for kw in WATCH_KEYWORDS:
         try:
             jobs = search_one_keyword(kw)
-            print(f"【{kw}】匹配到 {len(jobs)} 条岗位")
+            print(f"【{kw}】匹配且15天内岗位：{len(jobs)} 条")
             all_jobs.extend(jobs)
         except Exception as e:
             print(f"抓取关键词 {kw} 失败：{e}")
@@ -131,13 +176,17 @@ def main():
     all_jobs = list({j["id"]: j for j in all_jobs}.values())
     new_jobs = [j for j in all_jobs if j["id"] not in seen]
 
-    if first_run or new_jobs:
+    if len(all_jobs) == 0:
+        # 没有找到任何岗位，发送提示
+        push_dingtalk("【电工/仪表｜近15天岗位查询】", "本次未找到近15天电工、仪表相关岗位。", push_url)
+    elif first_run or new_jobs:
         jobs_push = all_jobs if first_run else new_jobs
-        msg_title = "【电工/仪表 岗位汇总】" if first_run else "【发现新岗位】电工/仪表"
+        msg_title = "【电工/仪表｜近15天岗位汇总】" if first_run else "【发现新岗位】电工/仪表（近15天）"
         msg = ""
         for idx, job in enumerate(jobs_push, 1):
             msg += (
                 f"{idx}. {job['title']}（关键词：{job['keyword']}）\n"
+                f"发布日期：{job['pub_date']}\n"
                 f"链接：{job['url']}\n\n"
             )
         push_dingtalk(msg_title, msg, push_url)
