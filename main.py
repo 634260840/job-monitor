@@ -18,6 +18,7 @@ HEADERS = {
     )
 }
 
+# ================== 站点配置 ==================
 SOURCES = [
     {
         "name": "新沂好就业",
@@ -124,7 +125,7 @@ def parse_jobs(src, html):
     return list(dedup.values())
 
 def push(title: str, content: str):
-    push_type = os.getenv("PUSH_TYPE", "pushplus").lower()
+    push_type = os.getenv("PUSH_TYPE", "dingtalk").lower()
     push_url = os.environ.get("PUSH_URL", "").strip()
 
     if not push_url:
@@ -132,15 +133,23 @@ def push(title: str, content: str):
         return
 
     if push_type == "bark":
+        # 苹果 Bark 专属格式
         url = push_url.rstrip("/") + "/" + quote(title) + "/" + quote(content)
         requests.get(url, timeout=15)
-    elif push_type == "pushplus":
-        requests.post(
-            "https://www.pushplus.plus/send",
-            json={"token": push_url, "title": title, "content": content.replace("\n", "<br>"), "template": "html"},
-            timeout=15,
-        )
+    elif push_type == "dingtalk":
+        # 钉钉机器人格式
+        requests.post(push_url, json={
+            "msgtype": "text",
+            "text": {"content": f"{title}\n{content}"}
+        }, timeout=15)
+    elif push_type == "wecom":
+        # 企业微信群机器人格式
+        requests.post(push_url, json={
+            "msgtype": "text",
+            "text": {"content": f"{title}\n{content}"}
+        }, timeout=15)
     else:
+        # 通用 Webhook
         requests.post(push_url, json={"title": title, "content": content}, timeout=15)
 
 def main():
