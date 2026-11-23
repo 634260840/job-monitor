@@ -18,39 +18,12 @@ HEADERS = {
     )
 }
 
-# ================== 站点配置 ==================
 SOURCES = [
     {
         "name": "新沂好就业",
         "url": "https://www.xyrsjjy.com/job/?c=search&keyword=%E7%94%B5%E5%B7%A5",
         "enabled": True,
-        "check_auth": False,
-        "card_selector": "",
-        # 真实岗位链接通常带有 index.php?c=show&id= 或者是 /job/数字.html
-        "link_pattern": r"/job/(index\.php\?c=show|detail|\d+)",
-        # 把刚才截图里出现的筛选链接全部屏蔽
-        "exclude_href": ["c=search", "keyword=", "all=", "tp=", "page=", "?c=list"],
-    },
-    {
-        "name": "钟吾直聘",
-        "url": "https://www.zhongwuzhipin.cn/search?pageIndex=1&keyword=%E7%94%B5%E5%B7%A5",
-        "enabled": False,
-        "check_auth": True,
-        "card_selector": "",
-        "link_pattern": r"/job/",
-        "exclude_href": [],
-        "reason": "需要登录和验证码",
-    },
-    {
-        "name": "新沂招聘网",
-        "url": "https://www.221400job.com/list.php?searchkey=%E7%94%B5%E5%B7%A5",
-        "enabled": False,
-        "check_auth": True,
-        "card_selector": "",
-        "link_pattern": r"/job/",
-        "exclude_href": [],
-        "reason": "需要短信登录+滑块验证",
-    },
+    }
 ]
 
 # 屏蔽网页上常见的按钮和无意义文字
@@ -85,53 +58,50 @@ def fetch_html(src):
 
 def parse_jobs(src, html):
     soup = BeautifulSoup(html, "html.parser")
-    jobs = []
-    cards = soup.find_all("a", href=True)
-
-    for a in cards:
+    jobs_dict = {}
+    
+    # 找到页面里所有的链接
+    for a in soup.find_all("a", href=True):
         href = urljoin(src["url"], a.get("href", ""))
         
-        # 1. 过滤基础无效链接
-        if not href or href.startswith("javascript") or href == "#":
+        # 核心逻辑：只要链接里包含 "id=数字"，就认定是职位详情
+        id_match = re.search(r'id=(\d+)', href)
+        if not id_match:
             continue
             
-        # 2. 必须匹配真实岗位的链接特征
-        if src.get("link_pattern") and not re.search(src["link_pattern"], href):
-            continue
-            
-        # 3. 过滤黑名单链接
-        if any(x in href for x in src.get("exclude_href", [])):
-            continue
-
-        # 4. 提取标题并清洗
+        job_id = id_match.group(1)
+        
+        # 抓取这个链接的文字
         title = clean(a.get_text(" ", strip=True))
         
-        # 如果标题太短，或者包含垃圾词汇，直接丢弃
-        if len(title) < 3:
+        # 如果抓到的是空，或者只有“申请”这种废话，就跳过
+        if len(title) < 2 or any(w in title for w in BAD_TITLE_WORDS):
             continue
-        if any(w in title for w in BAD_TITLE_WORDS):
-            continue
+            
+        # 智能去重：同一个职位可能有多个链接，我们保留文字最长的那个（通常是最完整的标题）
+        if job_id in jobs_dict:
+            if len(title) > len(jobs_dict[job_id]["title"]):
+                jobs_dict[job_id]["title"] = title
+        else:
+            jobs_dict[job_id] = {
+                "id": hashlib.md5(f"{src['name']}::{job_id}".encode("utf-8")).hexdigest(),
+                "source": src["name"],
+                "title": title[:120],
+                "url": href
+            }
 
-        title = title[:120]
-        jid = hashlib.md5(f"{src['name']}::{href}".encode("utf-8")).hexdigest()
-
-        jobs.append({"id": jid, "source": src["name"], "title": title, "url": href})
-
-    dedup = {j["id"]: j for j in jobs}
-    return list(dedup.values())
+    return list(jobs_dict.values())
 
 def push(title: str, content: str):
     push_type = os.getenv("PUSH_TYPE", "dingtalk").lower()
     push_url = os.environ.get("PUSH_URL", "").strip()
-
     if not push_url:
-        print("未配置 PUSH_URL，跳过推送")
+        print("未配置 PUSH_URL")
         return
-
     if push_type == "bark":
         url = push_url.rstrip("/") + "/" + quote(title) + "/" + quote(content)
         requests.get(url, timeout=15)
-    elif push_type in ["dingtalk", "wecom"]:
+    else:
         requests.post(push_url, json={
             "msgtype": "text",
             "text": {"content": f"{title}\n{content}"}
@@ -144,30 +114,25 @@ def main():
     errors = []
 
     for src in SOURCES:
-        if not src.get("enabled"):
-            continue
+        if not src.get("enabled"): continue
         try:
             html = fetch_html(src)
             jobs = parse_jobs(src, html)
-            print(f"{src['name']} 解析到 {len(jobs)} 条")
-            if not jobs:
-                errors.append(f"{src['name']} 解析到0条")
+            print(f"{src['name']} 解析到 {len(jobs)} 条真实岗位")
             all_jobs.extend(jobs)
         except Exception as e:
             errors.append(f"{src['name']} 抓取失败：{e}")
 
+    # 再全局按 id 去重一次
     all_jobs = list({j["id"]: j for j in all_jobs}.values())
-    
-    # 恢复正常的逻辑：只推真正的新岗位
     new_jobs = [j for j in all_jobs if j["id"] not in seen]
 
     if first_run:
         seen.update(j["id"] for j in all_jobs)
         save_seen(seen)
-        push("监控启动", f"已记录目前所有真实岗位 {len(all_jobs)} 条。以后有新增会立刻通知。")
+        push("监控启动", f"已成功记录目前所有真实岗位 {len(all_jobs)} 条。以后有新增会立刻通知。")
         return
 
-    # 发现新岗位，推送（最多20条防刷屏）
     for j in new_jobs[:20]:
         push(f"新岗位：{j['title']}", f"来源：{j['source']}\n{j['url']}")
 
