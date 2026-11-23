@@ -153,6 +153,7 @@ def push(title: str, content: str):
         requests.post(push_url, json={"title": title, "content": content}, timeout=15)
 
 def main():
+    push("测试消息", "如果你收到这条消息，说明配置完全成功！")
     first_run = not SEEN_FILE.exists()
     seen = load_seen()
     all_jobs = []
